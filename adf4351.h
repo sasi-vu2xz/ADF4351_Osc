@@ -1,6 +1,6 @@
 // adf4351.h
 // ---------------------------------------------------------------------
-// ADF4351 register math + bit-bang control for the QO-100 LO board.
+// ADF4351 register math + bit-bang control for the ADF4351_Osc LO board.
 //
 // Bus pins (ESP32-C3-SuperMini), confirmed against the schematic:
 //   GPIO6  -> CLK

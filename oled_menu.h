@@ -15,7 +15,7 @@
 // s_dispType stays DISP_NONE and the menu still runs the same state
 // machine, it just never draws anything - harmless, just not visible.
 //
-// Pins (confirmed against Schematic_QO-100_LO_V2.pdf):
+// Pins (confirmed against the ADF4351_Osc board schematic):
 //   GPIO3  - Encoder A (RA)
 //   GPIO4  - Encoder B (RB)
 //   GPIO20 - Encoder push switch (PS), active low, internal pull-up
