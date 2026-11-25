@@ -9,7 +9,7 @@
 #include <Preferences.h>
 #include "adf4351.h"
 
-#define LO_CONFIG_MAGIC 0x514F3130UL  // 'QO10'
+#define LO_CONFIG_MAGIC 0x41444631UL  // 'ADF1'
 
 // Converts a MHz value (double) to whole Hz (uint32_t) WITHOUT ever
 // routing through a 32-bit *signed* cast. `(uint32_t)(someDouble)`
