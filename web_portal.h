@@ -6,11 +6,16 @@
 // configuration page (TX_LO, RX_LO, reference, per-side output power),
 // and on Save & Apply computes the ADF4351 register sets, writes the
 // whole config to flash, and restarts the board so it comes back up
-// in normal run mode with the new values already active.
+// in normal run mode with the new values already active. Also serves
+// a second page at /update for OTA firmware updates: upload a .bin
+// exported from Arduino IDE (Sketch -> Export Compiled Binary) over
+// this same Wi-Fi connection and the board flashes it via the Update
+// library, no USB cable needed - see the OTA section below.
 #pragma once
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#include <Update.h>
 #include "lo_config.h"
 
 #define AP_SSID "ADF4351_OSC"
@@ -50,6 +55,9 @@ static String buildConfigPage(const LOConfig &cfg) {
   h += ".note{font-size:12px;color:#888;text-align:center;margin-top:10px}";
   h += ".cur{background:#f4f4f4;border-radius:6px;padding:8px 10px;font-size:12px;color:#555;margin:10px 0 16px}";
   h += ".sect{font-size:11px;font-weight:bold;color:#888;text-transform:uppercase;margin:16px 0 4px}";
+  h += ".btnlink{display:block;box-sizing:border-box;width:100%;margin-top:4px;padding:10px;";
+  h += "font-size:14px;font-weight:bold;text-align:center;text-decoration:none;";
+  h += "background:#444;color:#fff;border-radius:6px}";
   h += "</style></head><body>";
   h += "<h1>Transverter LO setup</h1>";
   h += "<p class='sub'>Set the local oscillator frequencies and output levels, then apply.</p>";
@@ -83,6 +91,8 @@ static String buildConfigPage(const LOConfig &cfg) {
   h += "<button type='submit'>Save &amp; apply</button>";
   h += "</form>";
   h += "<p class='note'>Registers are calculated, saved to flash, and the board restarts into normal operation with Wi-Fi off.</p>";
+  h += "<div class='sect'>Firmware</div>";
+  h += "<a class='btnlink' href='/update'>Update firmware (.bin)</a>";
   h += "</body></html>";
   return h;
 }
@@ -100,6 +110,131 @@ static const char *ERROR_PAGE =
   "<h2>Could not apply</h2><p>One or more values are outside what the ADF4351/reference "
   "chain can produce. Go back and check the frequencies.</p>"
   "<p><a href='/'>Back</a></p></body></html>";
+
+// ---- OTA firmware update (upload a .bin from Arduino IDE's "Export
+// compiled binary" over the captive-portal Wi-Fi, no USB cable needed)
+// ---------------------------------------------------------------------
+// Flow: GET /update shows a plain <input type=file> form; its POST
+// (also to /update) is handled by two callbacks per the ESP32
+// WebServer library's upload convention - handleOtaUploadChunk() is
+// called repeatedly as the multipart body streams in (START, repeated
+// WRITE, then END) and does the actual flash writes via the Update
+// library, while handleOtaUploadDone() only runs once, after the
+// upload callback has fully finished, to send the one and only HTTP
+// response (sending a response from inside the upload callback itself
+// doesn't work - the client is still mid-upload at that point).
+static const char *UPDATE_PAGE =
+  "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+  "<title>" AP_SSID " firmware update</title><style>"
+  "body{font-family:sans-serif;max-width:360px;margin:0 auto;padding:16px;color:#222}"
+  "h1{font-size:18px;margin:4px 0}"
+  "p.sub{font-size:13px;color:#666;margin:4px 0 20px}"
+  "input[type=file]{width:100%;box-sizing:border-box;padding:8px;font-size:13px;"
+  "border:1px solid #ccc;border-radius:6px;margin-bottom:16px}"
+  "button{width:100%;padding:10px;font-size:15px;font-weight:bold;"
+  "background:#1f6feb;color:#fff;border:none;border-radius:6px}"
+  "a{display:block;text-align:center;margin-top:16px;font-size:13px;color:#1f6feb}"
+  "#bar{display:none;height:8px;border-radius:4px;background:#eee;overflow:hidden;margin:4px 0 16px}"
+  "#bar div{height:100%;width:0;background:#1f6feb}"
+  "#msg{font-size:13px;text-align:center;margin-top:12px}"
+  "</style></head><body>"
+  "<h1>Firmware update</h1>"
+  "<p class='sub'>Upload a .bin exported from Arduino IDE "
+  "(Sketch &rarr; Export Compiled Binary). The board flashes it and "
+  "restarts automatically - don't close this page or power off while "
+  "it's uploading.</p>"
+  "<form id='f' method='POST' action='/update' enctype='multipart/form-data'>"
+  "<input type='file' name='firmware' accept='.bin' required>"
+  "<div id='bar'><div id='barfill'></div></div>"
+  "<button type='submit'>Upload &amp; flash</button>"
+  "</form>"
+  "<p id='msg'></p>"
+  "<a href='/'>Back to LO setup</a>"
+  "<script>"
+  "document.getElementById('f').addEventListener('submit',function(e){"
+  "e.preventDefault();"
+  "var fi=document.querySelector('input[type=file]');"
+  "if(!fi.files.length)return;"
+  "var bar=document.getElementById('bar'),fill=document.getElementById('barfill'),"
+  "msg=document.getElementById('msg');"
+  "bar.style.display='block';msg.textContent='Uploading...';"
+  "var fd=new FormData();fd.append('firmware',fi.files[0]);"
+  "var xhr=new XMLHttpRequest();xhr.open('POST','/update');"
+  "xhr.upload.onprogress=function(ev){"
+  "if(ev.lengthComputable){fill.style.width=Math.round(ev.loaded/ev.total*100)+'%';}"
+  "};"
+  "xhr.onload=function(){"
+  "msg.innerHTML=xhr.responseText;"
+  "};"
+  "xhr.onerror=function(){msg.textContent='Upload failed - connection lost.';};"
+  "xhr.send(fd);"
+  "});"
+  "</script>"
+  "</body></html>";
+
+static bool s_otaUpdateOk = false;
+static String s_otaErrorMsg = "";
+
+static void handleOtaUploadPage() {
+  portalServer.send(200, "text/html", UPDATE_PAGE);
+}
+
+// Streams the uploaded .bin straight into flash via the Update library
+// as each multipart chunk arrives - never buffers the whole file in
+// RAM (which the ESP32-C3's RAM couldn't hold anyway for a firmware
+// image this size).
+static void handleOtaUploadChunk() {
+  HTTPUpload &upload = portalServer.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    s_otaUpdateOk = false;
+    s_otaErrorMsg = "";
+    Serial.printf("OTA: receiving %s\n", upload.filename.c_str());
+    // UPDATE_SIZE_UNKNOWN: the browser's multipart stream doesn't give
+    // us the final size up front, so let Update size itself against
+    // the whole free OTA partition instead of a declared byte count.
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      s_otaErrorMsg = "Could not start update (" + String(Update.errorString()) + ")";
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (s_otaErrorMsg.length() == 0 &&
+        Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+      s_otaErrorMsg = "Flash write failed (" + String(Update.errorString()) + ")";
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (s_otaErrorMsg.length() != 0) {
+      Update.end(false);  // abort - leaves old firmware bootable
+    } else if (Update.end(true)) {
+      // true = set this image as the one to boot next time
+      Serial.printf("OTA: success, %u bytes written\n", upload.totalSize);
+      s_otaUpdateOk = true;
+    } else {
+      s_otaErrorMsg = "Could not finalize update (" + String(Update.errorString()) + ")";
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    Update.end(false);
+    s_otaErrorMsg = "Upload aborted";
+  }
+}
+
+// Runs once, after handleOtaUploadChunk() has already seen
+// UPLOAD_FILE_END (or ABORTED) and set s_otaUpdateOk/s_otaErrorMsg -
+// this is the only place it's safe to actually send the HTTP response
+// for a file upload route.
+static void handleOtaUploadDone() {
+  portalServer.sendHeader("Connection", "close");
+  if (s_otaUpdateOk) {
+    portalServer.send(200, "text/plain", "Update successful - restarting...");
+    delay(1500);
+    ESP.restart();
+  } else {
+    String msg = s_otaErrorMsg.length() ? s_otaErrorMsg : "Unknown error";
+    portalServer.send(200, "text/plain", "Update failed: " + msg);
+  }
+}
 
 static void handlePortalRoot() {
   LOConfig cfg;
@@ -199,6 +334,8 @@ static bool webPortalBegin() {
 
   portalServer.on("/", HTTP_GET, handlePortalRoot);
   portalServer.on("/save", HTTP_POST, handlePortalSave);
+  portalServer.on("/update", HTTP_GET, handleOtaUploadPage);
+  portalServer.on("/update", HTTP_POST, handleOtaUploadDone, handleOtaUploadChunk);
   registerCaptivePortalProbes();
   portalServer.onNotFound(handlePortalNotFound);
   portalServer.begin();
