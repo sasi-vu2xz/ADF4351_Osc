@@ -316,11 +316,14 @@ static bool webPortalBegin() {
   // Disable WiFi modem sleep - a well-known cause of an AP flickering
   // in and out even while the rest of the firmware stays healthy.
   WiFi.setSleep(false);
-  // ~50% of max transmit power (19.5dBm -> 17dBm is a 3dB cut, which
-  // is exactly half the power: 89mW -> ~50mW). Reduced from max after
-  // the board was running hot - trading a bit of range/margin for
-  // less heat and lower current draw.
-  WiFi.setTxPower(WIFI_POWER_17dBm);
+  // Back to max transmit power (19.5dBm). The reduced 17dBm setting
+  // (a 3dB/half-power cut, meant to trade range for less heat) turned
+  // out to make the AP effectively invisible to nearby phones/laptops
+  // in testing - a standalone test sketch broadcasting at max power
+  // was clearly visible from the same spot where ADF4351_OSC at 17dBm
+  // was not. Running at max power until the actual cause of that drop
+  // (antenna, placement, or something else) is understood.
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   // Open network - passing no password (or NULL) makes softAP() skip
   // WPA2 entirely, instead of merely using a blank one (which ESP32
   // WiFi still rejects as too short).

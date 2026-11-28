@@ -305,17 +305,37 @@ static void IRAM_ATTR oledEncIsr() {
   s_encPrevState = state;
 }
 
+// ---- TEMPORARY DEBUG: logs raw quadrature edge counts to Serial so we
+// can see exactly how many edges this specific encoder produces per
+// physical detent - the code below assumes 4 (a standard quadrature
+// encoder), dividing the raw accumulator by 4 to get "one click". If
+// the real hardware produces a different number (e.g. 1 or 2 due to
+// how its contacts are built, or edges get lost/cancelled to contact
+// bounce), turning it one physical click won't reliably add up to a
+// clean multiple of 4, and a logical detent will only fire every few
+// physical turns - exactly the "needs ~5 clicks" symptom reported.
+// Remove this whole block (and the two debug lines in
+// oledEncoderDelta() below) once the real edges-per-detent count is
+// known and, if needed, the "/ 4" divisor is corrected to match.
+static int8_t s_dbgLastAccum = 0;
+
 // Returns whole detents moved since the last call (can be negative),
 // keeping any leftover quarter-steps for next time.
 static int8_t oledEncoderDelta() {
   noInterrupts();
   int8_t accum = s_encAccum;
   interrupts();
+  if (accum != s_dbgLastAccum) {
+    Serial.printf("[ENC-DEBUG] raw accum=%d (was %d)\n", accum, s_dbgLastAccum);
+    s_dbgLastAccum = accum;
+  }
   int8_t detents = accum / 4;
   if (detents != 0) {
     noInterrupts();
     s_encAccum -= detents * 4;
     interrupts();
+    s_dbgLastAccum = 0;
+    Serial.printf("[ENC-DEBUG] -> logical detent(s) fired: %d\n", detents);
   }
   return detents;
 }

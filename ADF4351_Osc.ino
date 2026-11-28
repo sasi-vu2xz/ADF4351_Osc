@@ -267,7 +267,7 @@ void setup() {
   digitalWrite(PIN_LED_STATUS, LOW);
 
   // Sample the rotary encoder's push switch (PIN_ENC_SW, defined in
-  // oled_menu.h) early - before the 5s OCXO delay below, and before
+  // oled_menu.h) early - before the 500ms OCXO delay below, and before
   // oledMenuInit() re-configures this same pin for its own normal use
   // - so holding it down WHILE POWERING UP the board is what's
   // detected, not a press made later once the board's already running
@@ -314,10 +314,10 @@ void setup() {
   // instantly at frequency/amplitude, and the ADF4351's internal PLL
   // needs its own lock time - programming it immediately against a
   // reference that's still settling risks an initial lock onto the
-  // wrong point. 5s here costs nothing (it's once, at boot) and
-  // gives both a clean start, though it covers less of the OCXO's
-  // warm-up spec than the earlier 15s did - if frequency looks off
-  // right after power-up, that's the tradeoff to revisit first.
+  // wrong point, or failing to lock at all. Back to 5s (from a 500ms
+  // trial that turned out too short - PLL wasn't reliably locking
+  // right after power-up) to give the OCXO a proper warm-up window
+  // before the first write.
   Serial.println(F("Waiting 5s for OCXO/PLL to settle before first tune..."));
   delay(5000);
 
